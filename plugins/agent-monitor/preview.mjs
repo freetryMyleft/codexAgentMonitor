@@ -1,6 +1,7 @@
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { MonitorBackend } from './backend.mjs';
+import { readBoundSnapshot } from './binding.mjs';
 
 const backend = new MonitorBackend();
 const server = createServer(async (request, response) => {
@@ -31,7 +32,7 @@ const server = createServer(async (request, response) => {
       const input = { mode: url.searchParams.get('mode') || 'live', sessionId: url.searchParams.get('sessionId') || undefined };
       const node = { ...input, agentId: url.searchParams.get('agentId') };
       const data = url.pathname === '/api/details' ? await backend.details(node)
-        : url.pathname === '/api/model-settings' ? await backend.modelSettings(node) : await backend.read(input);
+        : url.pathname === '/api/model-settings' ? await backend.modelSettings(node) : await readBoundSnapshot(backend, input);
       response.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }).end(JSON.stringify(data));
     } catch (error) { response.writeHead(500, { 'Content-Type': 'application/json' }).end(JSON.stringify({ error: error.message })); }
   } else if (url.pathname === '/') {

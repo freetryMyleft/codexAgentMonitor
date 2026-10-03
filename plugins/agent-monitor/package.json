@@ -1,10 +1,11 @@
 {
   "name": "agent-monitor-plugin",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
   "scripts": {
     "build": "node scripts/build.mjs",
+    "release": "node scripts/release.mjs",
     "start": "node server.mjs",
     "preview": "node preview.mjs",
     "test": "node --test tests/*.test.mjs"
@@ -16,5 +17,7 @@
     "zod": "4.6.5",
     "ws": "8.22.0"
   },
-  "devDependencies": { "esbuild": "0.28.2" }
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
 }

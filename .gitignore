@@ -7,7 +7,9 @@ htmlcov/
 dist/
 .build/
 node_modules/
-plugins/agent-monitor/backend/
+plugins/agent-monitor/runtime.mjs
+plugins/agent-monitor/runtime.pending.mjs
+plugins/agent-monitor/.startup-lock/
 plugins/agent-monitor/dist/
 output/
 .playwright-cli/

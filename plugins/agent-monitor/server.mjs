@@ -5,8 +5,9 @@ import { registerAppResource, registerAppTool, RESOURCE_MIME_TYPE } from '@model
 import { OpenAIExtensions } from '@openai/mcp-extensions/server';
 import { z } from 'zod';
 import { MonitorBackend } from './backend.mjs';
+import { readBoundSnapshot, resolveBinding } from './binding.mjs';
 
-const server = new McpServer({ name: 'agent-monitor', version: '1.0.0' });
+const server = new McpServer({ name: 'agent-monitor', version: '1.1.0' });
 new OpenAIExtensions(server);
 const backend = new MonitorBackend();
 const uri = 'ui://agent-monitor/dashboard';
@@ -22,11 +23,11 @@ registerAppResource(server, 'Agent Monitor', uri, {}, async () => ({
 
 const inputSchema = {
   mode: z.enum(['live', 'demo']).optional().describe('live reads local logs; demo is explicitly simulated.'),
-  sessionId: z.string().regex(/^[a-zA-Z0-9_-]{1,80}$/).optional().describe('A local Codex session ID or unique prefix; omitted selects latest.'),
+  sessionId: z.string().regex(/^[a-zA-Z0-9_-]{1,80}$/).optional().describe('Explicit local session ID or unique prefix; otherwise binds host thread metadata when present, or visibly falls back to latest.'),
 };
-async function readSnapshot(input) {
+async function readSnapshot(input, extra) {
   try {
-    const data = await backend.read(input);
+    const data = await readBoundSnapshot(backend, input, extra);
     return { content: [{ type: 'text', text: `${data.demo ? '演示' : '本地会话'}：${data.agents.length} 个 Agent。${data.warning || ''}` }], structuredContent: data };
   } catch (error) {
     return { isError: true, content: [{ type: 'text', text: error.message }] };
@@ -51,8 +52,8 @@ server.registerTool('get_agent_details', {
   title: '读取选中节点的公开过程与结果', description: '仅在点击节点时读取该节点公开的过程说明和最终回答，不返回内部推理或其他节点正文。',
   inputSchema: { ...inputSchema, agentId: z.string().regex(/^[a-zA-Z0-9_-]{1,80}$/) },
   annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }, _meta: { ui: { visibility: ['app'] } },
-}, async input => {
-  try { return { content: [{ type: 'text', text: '已读取选中节点。' }], structuredContent: await backend.details(input) }; }
+}, async (input, extra) => {
+  try { return { content: [{ type: 'text', text: '已读取选中节点。' }], structuredContent: await backend.details(resolveBinding(input, extra).input) }; }
   catch (error) { return { isError: true, content: [{ type: 'text', text: error.message }] }; }
 });
 
@@ -61,8 +62,8 @@ server.registerTool('get_agent_model_settings', {
   title: '读取节点模型配置', description: '读取本机可用模型与选中节点的控制状态。只读；不会加载或启动节点。',
   inputSchema: nodeSchema,
   annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }, _meta: { ui: { visibility: ['app'] } },
-}, async input => {
-  try { return { content: [{ type: 'text', text: '已读取模型配置。' }], structuredContent: await backend.modelSettings(input) }; }
+}, async (input, extra) => {
+  try { return { content: [{ type: 'text', text: '已读取模型配置。' }], structuredContent: await backend.modelSettings(resolveBinding(input, extra).input) }; }
   catch (error) { return { isError: true, content: [{ type: 'text', text: error.message }] }; }
 });
 
@@ -71,8 +72,8 @@ server.registerTool('update_agent_model', {
   inputSchema: { ...nodeSchema, model: z.string().min(1).max(120), effort: z.string().min(1).max(32),
     scope: z.enum(['future', 'current']), turnId: z.string().min(1).max(120).optional() },
   annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false }, _meta: { ui: { visibility: ['app'] } },
-}, async input => {
-  try { const data = await backend.updateModel(input); return { content: [{ type: 'text', text: data.message }], structuredContent: data }; }
+}, async (input, extra) => {
+  try { const data = await backend.updateModel(resolveBinding(input, extra).input); return { content: [{ type: 'text', text: data.message }], structuredContent: data }; }
   catch (error) { return { isError: true, content: [{ type: 'text', text: error.message }] }; }
 });
 

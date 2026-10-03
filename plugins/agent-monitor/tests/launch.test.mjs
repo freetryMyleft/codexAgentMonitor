@@ -53,6 +53,29 @@ test('host result pins selected root even if launch arguments are absent', async
   assert.equal(host.calls[0].arguments.sessionId, 'chosen');
 });
 
+test('failed current-chat launch does not silently refresh an unrelated latest session', async () => {
+  const host = await hostHarness();
+  host.instance.ontoolresult({ isError: true, content: [{ type: 'text', text: '所选会话不可读' }] });
+  await new Promise(resolve => setImmediate(resolve));
+  await vm.runInContext('refresh()', host.context);
+  assert.equal(host.calls.length, 0);
+  assert.equal(vm.runInContext('launchPending', host.context), true);
+});
+
+test('host binding remains visible when refresh pins the session explicitly', async () => {
+  const host = await hostHarness();
+  host.instance.ontoolresult({ structuredContent: { root_id: 'chosen', agents: [], flows: [], binding: { source: 'host', label: '当前会话' } } });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(vm.runInContext('snapshot.binding.source', host.context), 'host');
+});
+
+test('latest fallback warning survives subsequent pinned refreshes', async () => {
+  const host = await hostHarness();
+  host.instance.ontoolresult({ structuredContent: { root_id: 'chosen', agents: [], flows: [], binding: { source: 'latest', label: '最近会话' } } });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.match(vm.runInContext('snapshot.warning', host.context), /未提供会话绑定/);
+});
+
 test('an early host result defers details and model reads until the app connects', async () => {
   const agents = [{ id: 'chosen', status: 'running', updated_at: 'initial' }];
   const host = await hostHarness({ agents, earlyResult: { root_id: 'chosen', agents, flows: [] } });

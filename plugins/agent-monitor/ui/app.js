@@ -8,6 +8,7 @@ const phaseLabels = { dispatch: '派发', start: '开始执行', return: '结果
 let mode = 'live', sessionId, selectedId, snapshot, paused = false, busy = false, timer, generation = 0;
 let app, connected = false, lastSuccess = 0;
 let launchPending = false, launchHandled = false;
+let launchBinding;
 let globalProcess = false;
 let detailMap = new Map(), detailTab = 'details';
 let detailLoads = new Map();
@@ -45,6 +46,10 @@ async function read(input) {
 function accept(data) {
   if (!data || !Array.isArray(data.agents) || !Array.isArray(data.flows)) throw new Error('快照格式不正确。');
   snapshot = data;
+  if (launchBinding && data.root_id === launchBinding.rootId) snapshot.binding = launchBinding.binding;
+  if (snapshot.binding?.source === 'latest' && !snapshot.warning?.includes('客户端未提供会话绑定')) {
+    snapshot.warning = [snapshot.warning, '客户端未提供会话绑定：当前展示最近更新的会话，请在会话列表中选择。'].filter(Boolean).join(' ');
+  }
   lastSuccess = Date.now();
   const previous = selectedId;
   if (!data.agents.some(a => a.id === selectedId)) selectedId = data.root_id || data.agents[0]?.id;
@@ -85,6 +90,7 @@ function switchSource(nextMode, nextSession) {
   launchPending = false;
   generation++;
   mode = nextMode;
+  launchBinding = undefined;
   sessionId = nextSession;
   selectedId = undefined;
   detailMap = new Map(); detailTab = 'details';
@@ -133,7 +139,7 @@ function render() {
   const root = data.agents.find(a => a.id === data.root_id) || data.agents[0];
   $('project').textContent = data.session_title || projectName(root);
   $('project').title = data.session_title || projectName(root);
-  $('session-id').textContent = data.demo ? '演示会话' : `${projectName(root)} · 本机会话`;
+  $('session-id').textContent = data.demo ? '演示会话' : `${projectName(root)} · ${data.binding?.label || '所选本机会话'}`;
   $('running').textContent = data.agents.filter(a => a.status === 'running').length;
   $('completed').textContent = data.agents.filter(a => a.status === 'done').length;
   $('attention').textContent = data.agents.filter(a => ['error', 'interrupted'].includes(a.status)).length;
@@ -479,7 +485,7 @@ window.addEventListener('pagehide', () => clearInterval(timer));
 async function start() {
   if (window.parent !== window) {
     launchPending = true;
-    app = new App({ name: 'Agent Monitor', version: '1.0.0' });
+    app = new App({ name: 'Agent Monitor', version: '1.1.0' });
     app.ontoolinput = input => {
       if (launchHandled) return;
       generation++;
@@ -491,8 +497,15 @@ async function start() {
       launchHandled = true;
       launchPending = false;
       generation++;
+      if (result.isError) {
+        launchPending = true;
+        notice((result.content?.find(c => c.type === 'text')?.text || '无法读取当前会话。') + ' 点击“真实会话”可浏览并手动选择其他会话。', true);
+        connection('会话读取失败', true);
+        return;
+      }
       if (result.structuredContent) {
         const data = result.structuredContent;
+        if (data.binding) launchBinding = { rootId: data.root_id, binding: data.binding };
         mode = data.demo ? 'demo' : 'live';
         if (!sessionId && !data.demo) sessionId = data.root_id || undefined;
         $('live-mode').classList.toggle('active', mode === 'live');

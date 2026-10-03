@@ -1,6 +1,6 @@
 {
   "name": "agent-monitor",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "本地 Codex Agent 调度监控：实时流程图、状态、Token 与流转时间线。",
   "author": { "name": "Agent Monitor" },
   "mcpServers": "./.mcp.json",
