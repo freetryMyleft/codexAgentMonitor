@@ -1,0 +1,16 @@
+{
+  "name": "agent-monitor",
+  "version": "1.0.0",
+  "description": "本地 Codex Agent 调度监控：实时流程图、状态、Token 与流转时间线。",
+  "author": { "name": "Agent Monitor" },
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Agent Monitor",
+    "shortDescription": "实时查看 Agent 调度与回流",
+    "longDescription": "读取本机 Codex 会话日志，展示主控、派发、Agent 执行、结果回流和审查事件。所有数据留在本机。",
+    "brandColor": "#5D72C5",
+    "composerIcon": "./assets/icon.svg",
+    "logo": "./assets/icon.svg",
+    "defaultPrompt": ["打开 Agent Monitor，查看当前会话的流程流转。"]
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "name": "agent-monitor-local",
+  "interface": { "displayName": "Agent Monitor · 本地插件" },
+  "plugins": [{
+    "name": "agent-monitor",
+    "source": { "source": "local", "path": "./plugins/agent-monitor" },
+    "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
+    "category": "Productivity"
+  }]
+}

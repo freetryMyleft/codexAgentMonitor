@@ -1,0 +1,20 @@
+{
+  "name": "agent-monitor-plugin",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "start": "node server.mjs",
+    "preview": "node preview.mjs",
+    "test": "node --test tests/*.test.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.0",
+    "@modelcontextprotocol/ext-apps": "1.7.5",
+    "@openai/mcp-extensions": "0.1.0",
+    "zod": "4.6.5",
+    "ws": "8.22.0"
+  },
+  "devDependencies": { "esbuild": "0.28.2" }
+}

@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+.venv/
+.coverage
+htmlcov/
+.pytest_cache/
+dist/
+.build/
+node_modules/
+plugins/agent-monitor/backend/
+plugins/agent-monitor/dist/
+output/
+.playwright-cli/
+.DS_Store
+.env
+.env.*
+!.env.example

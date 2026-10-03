@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agent Monitor</title>
+  <style>/* INLINE_STYLE */</style>
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar">
+      <div class="brand"><span class="brand-icon">↳</span><div><strong>Agent Monitor</strong><span class="brand-caption">FLOW OBSERVATORY</span></div></div>
+      <div class="top-actions">
+        <span id="connection" class="connection">连接中</span>
+        <div class="mode-switch" aria-label="数据来源"><button id="live-mode" class="active" type="button">真实会话</button><button id="demo-mode" type="button">演示</button></div>
+        <button class="icon-button" id="theme" title="切换明暗主题" aria-label="切换明暗主题">◐</button>
+      </div>
+    </header>
+    <div id="notice" class="notice" role="status" hidden></div>
+    <div class="workspace">
+      <aside class="sidebar">
+        <p class="eyebrow">WORKSPACE</p>
+        <h1 id="project">等待会话</h1>
+        <p id="session-id" class="session-id">本地 Agent 调度监控</p>
+        <label class="field-label" for="sessions">切换会话</label>
+        <select id="sessions"><option value="">最近更新的会话</option></select>
+        <div class="side-heading"><span>执行单元</span><span id="agent-count" class="count">0</span></div>
+        <div id="agent-list" class="agent-list"><p class="muted">读取本地日志后显示。</p></div>
+        <div class="sidebar-bottom"><span class="privacy-dot"></span><span>只读本地日志<br><small>状态以最后记录为准</small></span></div>
+      </aside>
+      <main class="main">
+        <div class="page-heading"><div><p class="eyebrow">ORCHESTRATION</p><h2>每一步，都看得见<span class="title-dot">.</span></h2><p class="subtitle">从主控派发，到执行与结果回流。</p></div><div class="refresh-control"><button id="pause" class="quiet-button">暂停刷新</button><button id="refresh" class="quiet-button">↻ 刷新</button></div></div>
+        <section class="metrics" aria-label="会话指标">
+          <div class="metric"><span>执行中</span><strong id="running">—</strong><small id="running-caption">等待日志</small></div>
+          <div class="metric"><span>已完成</span><strong id="completed">—</strong><small>已记录的完成状态</small></div>
+          <div class="metric"><span>累计 Token</span><strong id="tokens">—</strong><small id="token-caption">输入 + 输出，不重复计数</small></div>
+          <div class="metric"><span>需关注</span><strong id="attention">—</strong><small>错误 / 中断</small></div>
+        </section>
+        <section class="flow-section">
+          <div class="section-heading"><div><span class="section-icon">⌘</span><h3>调度流转</h3><span id="flow-badge" class="badge">等待事件</span></div><label class="filter-label">显示<select id="filter"><option value="all">全部节点</option><option value="running">执行中</option><option value="attention">需关注</option></select></label></div>
+          <div class="pipeline" id="pipeline"><span data-stage="main">主控</span><i>→</i><span data-stage="dispatch">派发</span><i>→</i><span data-stage="execute">执行</span><i>→</i><span data-stage="return">回流</span><i>→</i><span data-stage="review">审查</span></div>
+          <div id="graph-scroll" class="graph-scroll"><div id="graph" class="graph"><div class="empty-state"><div class="empty-symbol">⌘</div><h3>等待 Agent 会话</h3><p>选择一个本地会话，或切换演示查看完整流转。</p></div></div></div>
+          <div class="graph-footer"><div class="legend"><span><b class="dot running"></b>执行</span><span><b class="dot waiting"></b>等待</span><span><b class="dot done"></b>完成 / 回流</span><span><b class="dot error"></b>异常</span></div><span id="updated">—</span></div>
+        </section>
+      </main>
+      <aside class="activity-panel">
+        <section class="detail-section" id="detail"><div class="detail-empty">点击任意节点查看详情和结果。</div></section>
+        <div class="activity-header"><p class="eyebrow">EXECUTION TRACE</p><h3 id="process-title">节点执行过程</h3><p id="process-summary">点击节点查看其执行记录。</p></div>
+        <div class="mode-switch process-switch"><button id="node-process" class="active">本节点</button><button id="global-process">全局流转</button></div>
+        <div class="process-section-label">正在执行 <span>当前状态</span></div>
+        <div id="active-execution"><p class="muted">等待当前活动。</p></div>
+        <div class="process-section-label history-label">历史记录 <span>已发生的事件</span></div>
+        <div id="timeline" class="timeline"><p class="muted">等待第一条事件。</p></div>
+        <div class="timeline-footnote">连线方向来自父子关系；回流来自完成事件。不会根据工具正文猜测结果。</div>
+      </aside>
+    </div>
+  </div>
+  <script>/* INLINE_SCRIPT */</script>
+</body>
+</html>

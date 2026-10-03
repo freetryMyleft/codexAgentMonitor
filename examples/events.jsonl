@@ -1,0 +1,12 @@
+{"type":"agent","agent_id":"sol","name":"SOL · main","role":"main","model":"your-main-model","effort":"high","status":"running"}
+{"type":"agent","agent_id":"astra","parent_id":"sol","name":"ASTRA","role":"architect","model":"your-review-model","status":"waiting"}
+{"type":"agent","agent_id":"worker","parent_id":"sol","role":"worker","name":"worker","model":"your-worker-model","effort":"medium","status":"running"}
+{"type":"agent","agent_id":"explorer","parent_id":"sol","role":"explorer","name":"explorer","model":"your-worker-model","effort":"medium","status":"done"}
+{"type":"agent","agent_id":"researcher","parent_id":"sol","role":"researcher","name":"researcher","model":"your-worker-model","effort":"medium","status":"running"}
+{"type":"fork","agent_id":"sol","label":"which file","confidence":0.91,"route":"sharp","forks":1654}
+{"type":"fork","agent_id":"sol","label":"which tool","confidence":0.47,"route":"split","forks":1655}
+{"type":"fork","agent_id":"sol","label":"retry or stop","confidence":0.93,"route":"sharp","forks":1656}
+{"type":"advice","agent_id":"astra","message":"run migration; add regression tests"}
+{"type":"tool","agent_id":"worker","name":"run tests"}
+{"type":"usage","agent_id":"worker","input_tokens":12000,"cached_input_tokens":8000,"output_tokens":2400,"total_tokens":14400}
+{"type":"status","agent_id":"explorer","status":"done","message":"mapped 4 call sites"}
