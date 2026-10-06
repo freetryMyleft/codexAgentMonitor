@@ -1,5 +1,6 @@
 import { App } from '@modelcontextprotocol/ext-apps';
 import { layoutAgents, escapeHTML as esc, shortNumber as num, stageFor, nodeEvents, sessionLabel, agentGroups } from './graph.js';
+import { filterSessions, groupSessions, catalogProjectOptions, catalogProjectLabel, sessionProjectPath } from './catalog.js';
 
 const $ = id => document.getElementById(id);
 const statusLabels = { running: '执行中', done: '已完成', waiting: '等待中', idle: '空闲', error: '错误', interrupted: '已中断', unknown: '未知' };
@@ -13,6 +14,8 @@ let globalProcess = false;
 let detailMap = new Map(), detailTab = 'details';
 let detailLoads = new Map();
 let modelStates = new Map();
+let catalogSessions = [], catalogLoaded = false, catalogBusy = false, catalogTimer;
+let catalogPageSize = 100, catalogRenderLimit = 50, catalogWarning = '', catalogDataSignature = '', catalogRenderSignature = '';
 let currentTheme = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 let graphSignature = '', sessionSignature = '', timelineSignature = '';
 document.documentElement.dataset.theme = currentTheme;
@@ -43,13 +46,135 @@ async function read(input) {
   return data;
 }
 
+async function readCatalogPage(input) {
+  if (app && connected) {
+    const result = await app.callServerTool({ name: 'list_agent_sessions', arguments: input });
+    if (result.isError) throw new Error(result.content?.find(item => item.type === 'text')?.text || '读取会话目录失败');
+    return result.structuredContent;
+  }
+  if (window.parent !== window) throw new Error('插件连接尚未就绪。');
+  const query = new URLSearchParams(input);
+  const response = await fetch(`/api/sessions?${query}`, { signal: AbortSignal.timeout(30000) });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || '读取会话目录失败');
+  return data;
+}
+
+async function readWholeCatalog() {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const sessions = [];
+    let offset = 0, revision;
+    try {
+      while (true) {
+        const page = await readCatalogPage({ offset, limit: catalogPageSize, refresh: offset === 0, ...(revision ? { revision } : {}) });
+        if (!page || !Array.isArray(page.sessions) || !Number.isInteger(page.total)) throw new Error('会话目录格式不正确。');
+        if (page.offset !== undefined && page.offset !== offset) throw new Error('会话目录分页位置不一致。');
+        if (revision && page.revision !== revision) throw new Error('会话目录已更新，请重新载入。');
+        revision = page.revision;
+        sessions.push(...page.sessions);
+        if (page.next_offset == null) {
+          if (sessions.length !== page.total) throw new Error('会话目录分页不完整，请重试。');
+          return { sessions, total: page.total, revision, warning: page.warning || '' };
+        }
+        if (!Number.isInteger(page.next_offset) || page.next_offset <= offset || page.next_offset > page.total) throw new Error('会话目录分页位置不正确。');
+        offset = page.next_offset;
+      }
+    } catch (error) {
+      if (attempt === 2 || !/已更新|版本|重新载入/.test(error.message)) throw error;
+    }
+  }
+  throw new Error('会话目录已更新，请重新载入。');
+}
+
+async function refreshCatalog() {
+  if (catalogBusy) return;
+  if (mode === 'demo') { renderCatalog(); return; }
+  catalogBusy = true;
+  const ownMode = mode;
+  try {
+    const data = await readWholeCatalog();
+    if (mode !== ownMode || ownMode !== 'live') return;
+    catalogSessions = data.sessions;
+    catalogLoaded = true;
+    catalogWarning = data.warning || '';
+    catalogDataSignature = JSON.stringify(catalogSessions.map(session => [session.id, session.title, session.cwd, session.parent_id, session.status, session.updated_at]));
+    catalogRenderSignature = '';
+    renderSessions(snapshot || {});
+    renderCatalog();
+  } catch (error) {
+    if (mode !== ownMode || ownMode !== 'live') return;
+    catalogWarning = error.message;
+    catalogRenderSignature = '';
+    renderCatalog();
+  } finally { catalogBusy = false; }
+}
+
+function renderCatalog() {
+  const search = $('catalog-search'), projectFilter = $('catalog-project'), statusFilter = $('catalog-status');
+  const summary = $('catalog-summary'), list = $('catalog-list'), more = $('catalog-more');
+  if (!search || !projectFilter || !statusFilter || !summary || !list || !more) return;
+  const disabled = mode === 'demo';
+  const renderKey = JSON.stringify([mode, catalogDataSignature, search.value, projectFilter.value, statusFilter.value, sessionId, catalogRenderLimit, catalogWarning]);
+  if (renderKey === catalogRenderSignature) return;
+  catalogRenderSignature = renderKey;
+  search.disabled = projectFilter.disabled = statusFilter.disabled = disabled;
+  if (disabled) {
+    $('catalog-count').textContent = '—';
+    summary.textContent = '演示模式下不读取本机会话目录。';
+    list.replaceChildren(); more.hidden = true;
+    return;
+  }
+  const paths = catalogProjectOptions(catalogSessions);
+  const selectedProject = projectFilter.value;
+  const optionsKey = JSON.stringify(paths);
+  if (projectFilter.dataset.optionsKey !== optionsKey) {
+    projectFilter.replaceChildren(new Option('所有项目', ''));
+    for (const path of paths) projectFilter.add(new Option(catalogProjectLabel(path, paths), path));
+    projectFilter.dataset.optionsKey = optionsKey;
+    projectFilter.value = paths.includes(selectedProject) ? selectedProject : '';
+  }
+  const filtered = filterSessions(catalogSessions, { query: search.value, project: projectFilter.value, status: statusFilter.value });
+  const clipped = filtered.length > catalogRenderLimit;
+  const visible = clipped ? catalogRenderLimit : filtered.length;
+  $('catalog-count').textContent = catalogLoaded ? `${filtered.length} / ${catalogSessions.length}` : '—';
+  summary.textContent = catalogWarning
+    ? `${catalogLoaded ? `显示 ${catalogSessions.length} 项上次读取的目录。` : '尚无可显示的目录。'} ${catalogWarning}`
+    : catalogLoaded ? `共 ${catalogSessions.length} 个会话${filtered.length !== catalogSessions.length ? ` · 匹配 ${filtered.length} 个` : ''}` : '正在读取会话目录…';
+  if (!filtered.length) {
+    list.innerHTML = catalogLoaded ? '<p class="catalog-empty">没有匹配的会话。</p>' : '';
+    more.hidden = true;
+    return;
+  }
+  let remaining = visible;
+  const markup = [];
+  for (const group of groupSessions(filtered)) {
+    if (remaining <= 0) break;
+    const groupItems = group.projects.reduce((sum, item) => sum + item.sessions.length, 0);
+    markup.push(`<div class="catalog-group-heading">${esc(group.label)}<span>${groupItems}</span></div>`);
+    for (const project of group.projects) {
+      if (remaining <= 0) break;
+      const items = project.sessions.slice(0, remaining);
+      markup.push(`<div class="catalog-project-heading" title="${esc(project.path)}">${esc(catalogProjectLabel(project.path, paths))}<span>${project.sessions.length}</span></div>`);
+      markup.push(items.map(session => {
+        const label = session.title || session.cwd?.split(/[\\/]/).filter(Boolean).at(-1) || '未命名会话';
+        const parent = session.parent_id ? `子会话 · ${session.parent_id}` : session.cwd || '项目路径未知';
+        const selected = session.id === sessionId;
+        return `<button class="catalog-session ${selected ? 'selected' : ''}" type="button" data-session="${esc(session.id)}" title="${esc(`${label} · ${session.cwd || ''} · ${session.id}`)}" aria-pressed="${selected}">
+          <span class="catalog-session-status ${esc(session.status || 'unknown')}"></span><span class="catalog-session-copy"><strong>${esc(label)}</strong><small>${esc(parent)}</small><code>${esc(session.id)}</code></span><time>${esc(session.updated_at ? new Date(session.updated_at).toLocaleDateString('zh-CN') : '时间未知')}</time>
+        </button>`;
+      }).join(''));
+      remaining -= items.length;
+    }
+  }
+  list.innerHTML = markup.join('');
+  more.hidden = !clipped;
+  more.textContent = `显示更多（${filtered.length - visible}）`;
+}
+
 function accept(data) {
   if (!data || !Array.isArray(data.agents) || !Array.isArray(data.flows)) throw new Error('快照格式不正确。');
   snapshot = data;
   if (launchBinding && data.root_id === launchBinding.rootId) snapshot.binding = launchBinding.binding;
-  if (snapshot.binding?.source === 'latest' && !snapshot.warning?.includes('客户端未提供会话绑定')) {
-    snapshot.warning = [snapshot.warning, '客户端未提供会话绑定：当前展示最近更新的会话，请在会话列表中选择。'].filter(Boolean).join(' ');
-  }
   lastSuccess = Date.now();
   const previous = selectedId;
   if (!data.agents.some(a => a.id === selectedId)) selectedId = data.root_id || data.agents[0]?.id;
@@ -86,6 +211,7 @@ async function refresh() {
 }
 
 function switchSource(nextMode, nextSession) {
+  const previousMode = mode;
   launchHandled = true;
   launchPending = false;
   generation++;
@@ -99,8 +225,8 @@ function switchSource(nextMode, nextSession) {
   paused = false;
   snapshot = undefined;
   graphSignature = sessionSignature = timelineSignature = '';
-  $('project').textContent = '正在载入会话';
-  $('session-id').textContent = nextSession || '等待数据源';
+  $('project').textContent = nextSession ? '正在载入会话' : mode === 'live' ? '所有会话' : '演示会话';
+  $('session-id').textContent = nextSession || (mode === 'live' ? '尚未选择会话' : '演示数据源');
   for (const id of ['running', 'completed', 'attention', 'tokens']) $(id).textContent = '—';
   $('running-caption').textContent = '正在读取日志';
   $('token-caption').textContent = '等待用量记录';
@@ -121,6 +247,8 @@ function switchSource(nextMode, nextSession) {
   $('live-mode').classList.toggle('active', mode === 'live');
   $('demo-mode').classList.toggle('active', mode === 'demo');
   notice(mode === 'demo' ? '演示模式 · 所有节点、用量与流转均为模拟数据。' : '正在读取所选会话…');
+  renderCatalog();
+  if (previousMode !== 'live' && mode === 'live') void refreshCatalog();
   void refresh();
 }
 
@@ -137,25 +265,28 @@ function symbol(agent) { return agent.id === snapshot?.root_id ? '⌘' : /review
 function render() {
   const data = snapshot;
   const root = data.agents.find(a => a.id === data.root_id) || data.agents[0];
-  $('project').textContent = data.session_title || projectName(root);
-  $('project').title = data.session_title || projectName(root);
-  $('session-id').textContent = data.demo ? '演示会话' : `${projectName(root)} · ${data.binding?.label || '所选本机会话'}`;
-  $('running').textContent = data.agents.filter(a => a.status === 'running').length;
-  $('completed').textContent = data.agents.filter(a => a.status === 'done').length;
-  $('attention').textContent = data.agents.filter(a => ['error', 'interrupted'].includes(a.status)).length;
+  const unselected = !data.demo && !sessionId && !data.root_id && data.agents.length === 0;
+  const project = unselected ? '所有会话' : data.session_title || projectName(root);
+  $('project').textContent = project;
+  $('project').title = project;
+  $('session-id').textContent = unselected ? '尚未选择会话' : data.demo ? '演示会话' : `${projectName(root)} · ${data.binding?.label || '所选本机会话'}`;
+  $('running').textContent = unselected ? '—' : data.agents.filter(a => a.status === 'running').length;
+  $('completed').textContent = unselected ? '—' : data.agents.filter(a => a.status === 'done').length;
+  $('attention').textContent = unselected ? '—' : data.agents.filter(a => ['error', 'interrupted'].includes(a.status)).length;
   const known = data.agents.filter(a => a.total_tokens != null);
-  $('tokens').textContent = known.length ? num(known.reduce((sum, a) => sum + a.total_tokens, 0)) : '—';
-  $('token-caption').textContent = known.length < data.agents.length ? `${data.agents.length - known.length} 个节点的用量未知` : '输入 + 输出，不重复计数';
-  $('running-caption').textContent = `${data.agents.length} 个执行单元 · 含主控`;
+  $('tokens').textContent = !unselected && known.length ? num(known.reduce((sum, a) => sum + a.total_tokens, 0)) : '—';
+  $('token-caption').textContent = unselected ? '选择会话后显示用量' : known.length < data.agents.length ? `${data.agents.length - known.length} 个节点的用量未知` : '输入 + 输出，不重复计数';
+  $('running-caption').textContent = unselected ? '从目录选择本机会话' : `${data.agents.length} 个执行单元 · 含主控`;
   $('agent-count').textContent = String(data.agents.length).padStart(2, '0');
   const stage = stageFor(data);
   const stageLabels = { main: '主控工作中', dispatch: '正在派发', execute: '执行中', return: '结果回流', review: '审查中' };
-  $('flow-badge').textContent = data.agents.length ? stageLabels[stage] : '等待事件';
+  $('flow-badge').textContent = unselected ? '选择会话' : data.agents.length ? stageLabels[stage] : '等待事件';
   for (const el of $('pipeline').querySelectorAll('[data-stage]')) el.classList.toggle('current', el.dataset.stage === stage);
-  $('updated').textContent = '更新于 ' + new Date(data.generated_at).toLocaleTimeString('zh-CN', { hour12: false });
+  $('updated').textContent = unselected ? '目录只显示会话元数据' : '更新于 ' + new Date(data.generated_at).toLocaleTimeString('zh-CN', { hour12: false });
   connection(paused ? '已暂停' : data.demo ? '模拟数据' : '实时连接', paused);
   notice(data.warning || (data.demo ? '演示模式 · 所有节点、用量与流转均为模拟数据。' : ''));
   renderSessions(data);
+  renderCatalog();
   renderAgents(data);
   renderGraph(data);
   renderDetail(data);
@@ -163,14 +294,15 @@ function render() {
 }
 
 function renderSessions(data) {
-  const key = JSON.stringify([data.sessions, sessionId, mode]);
+  const select = $('sessions');
+  if (!select) return;
+  const key = JSON.stringify([catalogDataSignature, sessionId, mode]);
   if (key === sessionSignature) return;
   sessionSignature = key;
-  const select = $('sessions');
-  select.replaceChildren(new Option('最近更新的会话', ''));
-  for (const session of data.sessions || []) {
+  select.replaceChildren(new Option('选择本机会话', ''));
+  for (const session of catalogSessions) {
     const name = sessionLabel(session);
-    select.add(new Option(`${name} · ${session.cwd.split(/[\\/]/).filter(Boolean).at(-1) || '本地项目'}`, session.id));
+    select.add(new Option(`${name} · ${session.id}`, session.id));
   }
   select.value = sessionId || '';
   select.disabled = mode === 'demo';
@@ -181,7 +313,7 @@ function renderAgents(data) {
     <button class="agent-item ${agent.id === selectedId ? 'selected' : ''}" data-agent="${esc(agent.id)}" title="${esc(agentLabel(agent))}">
       <span class="agent-symbol">${symbol(agent)}</span><span class="agent-copy"><strong>${esc(agentLabel(agent))}</strong><small>${esc(roleLabels[agent.role] || agent.role)} · ${esc(agent.effort)}</small></span>
       <b class="dot ${esc(agent.status)}" title="${esc(statusLabels[agent.status] || '未知')}"></b>
-    </button>`).join('')).join('') : '<p class="muted">尚未找到会话，可切换演示。</p>';
+    </button>`).join('')).join('') : data.demo ? '<p class="muted">演示数据中暂无节点。</p>' : '<p class="muted">先从左侧目录选择会话。</p>';
 }
 
 function pathBetween(from, to) {
@@ -207,7 +339,7 @@ function renderGraph(data) {
   const graph = $('graph');
   if (!layout.root) {
     graph.style.width = '100%'; graph.style.height = '400px';
-    graph.innerHTML = '<div class="empty-state"><div class="empty-symbol">⌘</div><h3>等待 Agent 会话</h3><p>选择本地会话，或切换演示查看完整流转。</p></div>';
+    graph.innerHTML = '<div class="empty-state"><div class="empty-symbol">⌘</div><h3>等待 Agent 会话</h3><p>先从左侧目录选择一个会话，或切换演示查看完整流转。</p></div>';
     return;
   }
   graph.style.width = `${layout.width}px`;
@@ -421,6 +553,11 @@ function renderTimeline(data) {
 }
 
 document.addEventListener('click', event => {
+  const catalogItem = event.target.closest('[data-session]');
+  if (catalogItem) {
+    switchSource('live', catalogItem.dataset.session);
+    return;
+  }
   const item = event.target.closest('[data-agent]');
   if (item && snapshot) {
     selectedId = item.dataset.agent;
@@ -460,13 +597,18 @@ $('node-process').addEventListener('click', () => { globalProcess = false; if (s
 $('global-process').addEventListener('click', () => { globalProcess = true; if (snapshot) renderTimeline(snapshot); });
 $('live-mode').addEventListener('click', () => switchSource('live'));
 $('demo-mode').addEventListener('click', () => switchSource('demo'));
-$('sessions').addEventListener('change', event => switchSource('live', event.target.value || undefined));
+if ($('sessions')) $('sessions').addEventListener('change', event => switchSource('live', event.target.value || undefined));
+$('catalog-search')?.addEventListener('input', () => { catalogRenderLimit = 50; renderCatalog(); });
+$('catalog-project')?.addEventListener('change', () => { catalogRenderLimit = 50; renderCatalog(); });
+$('catalog-status')?.addEventListener('change', () => { catalogRenderLimit = 50; renderCatalog(); });
+$('catalog-more')?.addEventListener('click', () => { catalogRenderLimit += 50; renderCatalog(); });
 $('filter').addEventListener('change', () => snapshot && renderGraph(snapshot));
 $('refresh').addEventListener('click', () => {
   paused = false; $('graph').classList.remove('paused'); $('pause').textContent = '暂停刷新';
   const load = detailLoads.get(selectedId);
   if (load) load.signature = '';
   void refresh();
+  void refreshCatalog();
 });
 $('pause').addEventListener('click', () => {
   paused = !paused;
@@ -479,13 +621,13 @@ $('theme').addEventListener('click', () => {
   currentTheme = currentTheme === 'light' ? 'dark' : 'light';
   document.documentElement.dataset.theme = currentTheme;
 });
-document.addEventListener('visibilitychange', () => { if (!document.hidden) void refresh(); });
-window.addEventListener('pagehide', () => clearInterval(timer));
+document.addEventListener('visibilitychange', () => { if (!document.hidden) { void refresh(); void refreshCatalog(); } });
+window.addEventListener('pagehide', () => { clearInterval(timer); clearInterval(catalogTimer); });
 
 async function start() {
   if (window.parent !== window) {
     launchPending = true;
-    app = new App({ name: 'Agent Monitor', version: '1.1.0' });
+    app = new App({ name: 'Agent Monitor', version: '1.2.0' });
     app.ontoolinput = input => {
       if (launchHandled) return;
       generation++;
@@ -498,7 +640,6 @@ async function start() {
       launchPending = false;
       generation++;
       if (result.isError) {
-        launchPending = true;
         notice((result.content?.find(c => c.type === 'text')?.text || '无法读取当前会话。') + ' 点击“真实会话”可浏览并手动选择其他会话。', true);
         connection('会话读取失败', true);
         return;
@@ -507,7 +648,6 @@ async function start() {
         const data = result.structuredContent;
         if (data.binding) launchBinding = { rootId: data.root_id, binding: data.binding };
         mode = data.demo ? 'demo' : 'live';
-        if (!sessionId && !data.demo) sessionId = data.root_id || undefined;
         $('live-mode').classList.toggle('active', mode === 'live');
         $('demo-mode').classList.toggle('active', mode === 'demo');
         try { accept(data); } catch (error) { notice(error.message, true); }
@@ -530,10 +670,12 @@ async function start() {
     $('live-mode').classList.toggle('active', mode === 'live');
     $('demo-mode').classList.toggle('active', mode === 'demo');
   }
+  void refreshCatalog();
   await refresh();
   timer = setInterval(() => {
     if (!paused && lastSuccess && Date.now() - lastSuccess > 10000) connection('数据更新延迟', true);
     void refresh();
   }, 1800);
+  catalogTimer = setInterval(() => { if (!document.hidden) void refreshCatalog(); }, 30000);
 }
 void start();

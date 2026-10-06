@@ -1,35 +1,31 @@
 # Codex Agent Monitor
 
-包含图形化 Codex 侧边栏插件和终端 Agent 树监控脚本。支持本机 Codex 会话、独立 JSONL 事件文件及动态演示。
+包含全会话监控中心、Codex 插件和终端 Agent 树监控脚本。支持本机 Codex 会话、独立 JSONL 事件文件及动态演示。
 
 [安装指南](docs/install.md) · [界面截图](docs/screenshots.md) · [插件说明](plugins/agent-monitor/README.md)
 
-![Agent Monitor：调度流转、会话列表和节点详情（演示数据）](docs/screenshots/overview-light.png)
+![Agent Monitor：全会话中心（模拟验收数据）](docs/screenshots/all-session-hub.png)
 
 截图来自本地浏览器预览，使用模拟数据。插件已声明 Codex 全局侧边栏和会话面板入口；客户端入口是否可见仍需安装后验收。
 
 ## 快速安装
 
-需要支持插件的 Codex 客户端、Codex CLI、Node.js 20+ 和 Python 3.10+。源码构建还需要 npm。
+需要 Codex CLI、Node.js 20+ 和 Python 3.10+。普通用户使用仓库中的预构建包，无需 npm 或手动编译。
 
 ```bash
 git clone https://github.com/freetryMyleft/codexAgentMonitor.git
 cd codexAgentMonitor
 
-# 预先构建，避免首次打开插件等待安装依赖
-npm --prefix plugins/agent-monitor ci --ignore-scripts
-npm --prefix plugins/agent-monitor run build
-
-# 注册市场并安装
-codex plugin marketplace add "$PWD" --json
-codex plugin add agent-monitor@agent-monitor-local --json
+bash install.sh
 ```
 
-重开客户端后，在插件列表中确认 Agent Monitor 已启用，再检查全局侧边栏或会话面板入口。也可在会话中引用 `@Agent Monitor` 并请求“打开监控面板”。支持情况取决于客户端，详见[安装后的检查](docs/install.md#安装后的检查)。
+安装器检查依赖、验证 SHA-256、运行服务诊断并注册独立市场。重开客户端后，在插件列表中确认启用，可引用 `@Agent Monitor` 请求“打开全会话中心”。打开后搜索并选择任意本机会话，不自动绑定当前聊天。
+
+侧边栏入口的 `global` 声明已提供，但官方 UI 扩展说明面向 ChatGPT，当前 Codex 是否展示该入口需实际确认。安装成功不代表侧边栏已出现。若客户端未展示入口，可使用安装器打印的浏览器备用命令。详见[安装指南](docs/install.md)。
 
 ## Codex 侧边栏插件
 
-插件源码位于 `plugins/agent-monitor/`，通过 MCP Apps 加载图形界面，并声明全局侧边栏与会话入口。展示父子关系、派发、执行、结果回流、审查、Token 明细和事件时间线；支持切换会话、暂停、过滤和明暗主题。
+插件源码位于 `plugins/agent-monitor/`，通过 MCP Apps 加载图形界面，并声明全局侧边栏与会话入口。展示父子关系、派发、执行、结果回流、审查、Token 明细和事件时间线；支持全会话搜索、项目与状态筛选、暂停和明暗主题。以下编译步骤仅供开发者：
 
 ```bash
 cd plugins/agent-monitor
@@ -44,13 +40,13 @@ codex plugin marketplace add "$PWD" --json
 codex plugin add agent-monitor@agent-monitor-local --json
 ```
 
-源码插件首次启动会自动安装锁定依赖并构建（需要 npm、网络与可写目录）；预构建安装包包含 MCP runtime、界面和 Python 读取器，不需要 node_modules 或外层仓库。包位于 `plugins/agent-monitor/dist/agent-monitor-1.1.0.tar.gz`，使用方法见插件内 README。
+开发者源码安装仍可首次构建；推荐普通用户运行 `bash install.sh`，它使用 `releases/agent-monitor-1.2.0.tar.gz` 及校验文件。预构建安装包包含 MCP runtime、界面、Python 读取器、诊断与浏览器预览，不需要 node_modules 或外层仓库。
 
 新增或更新插件可能需要重新打开客户端才能加载；实际侧边栏入口须在客户端确认，安装成功不等于已验证入口可见。本项目不会修改客户端内部文件或强制关闭客户端。
 
-### 当前会话绑定
+### 全会话选择
 
-显式选择会话优先，否则从每次工具调用的 executor 元数据读取当前 thread ID。面板首次打开后固定到返回的会话。未提供元数据时明确标注“最近会话（未绑定当前聊天）”并提醒手动选择；读取当前聊天失败时不会静默跳到其他聊天。绑定适配经过真实 MCP 调用测试，具体客户端是否传递元数据仍需客户端验收。
+默认打开未选中的会话中心。目录独立刷新，列出本机可读的主会话和子会话，不再截断为最近 20 条。选择后加载该会话的流程树，目录更新不改变选择。状态依据日志最后记录，证据不足时显示未知；不根据文件时间推断进程仍在运行。模型修改需要显式所选会话。
 
 不经过客户端也可本地预览：
 

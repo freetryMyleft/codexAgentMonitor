@@ -1,11 +1,22 @@
 import json
+import importlib
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 
 from sidebar_state import SidebarState, SessionNames
 from desktop_bridge import desktop_snapshot
 from agent_monitor import DemoSource
+
+_plugin_backend = Path(__file__).resolve().parents[1] / 'plugins' / 'agent-monitor' / 'backend'
+sys.path.insert(0, str(_plugin_backend))
+try:
+    SessionCatalog = importlib.import_module('session_catalog').SessionCatalog
+except (ImportError, AttributeError):
+    SessionCatalog = None
+finally:
+    sys.path.remove(str(_plugin_backend))
 
 
 class SidebarTests(unittest.TestCase):
@@ -74,3 +85,82 @@ class SidebarTests(unittest.TestCase):
         self.assertTrue(state.agents['child'].returned_at)
         state.consume({'type': 'status', 'agent_id': 'child', 'status': 'running'}, 'root')
         self.assertEqual(state.agents['child'].returned_at, '')
+
+    def test_catalog_pages_all_sessions_including_children_without_log_bodies(self):
+        self.assertIsNotNone(SessionCatalog, 'the independent session catalog should be available')
+        with tempfile.TemporaryDirectory() as directory:
+            sessions = Path(directory) / 'sessions'
+            sessions.mkdir()
+            names = Path(directory) / 'session_index.jsonl'
+            names.write_text(json.dumps({'id': 'root-00', 'thread_name': 'Catalog title'}) + '\n')
+            for index in range(26):
+                session_id = f'root-{index:02d}'
+                parent = 'root-00' if index >= 24 else None
+                records = [{'type': 'session_meta', 'payload': {'id': session_id, 'parent_thread_id': parent,
+                           'cwd': f'/project-{index % 2}'}, 'timestamp': '2026-10-04T01:00:00Z'}]
+                if index == 1:
+                    records.extend([
+                        {'type': 'event_msg', 'payload': {'type': 'task_started'}, 'timestamp': '2026-10-04T01:01:00Z'},
+                        {'type': 'log', 'payload': {'message': 'later note'}, 'timestamp': '2026-10-04T01:09:00Z'},
+                    ])
+                if index == 2:
+                    records.append({'type': 'response_item', 'payload': {'type': 'message', 'content': 'PRIVATE LOG BODY'}})
+                (sessions / f'{session_id}.jsonl').write_text(''.join(json.dumps(record) + '\n' for record in records))
+            catalog = SessionCatalog(sessions, names)
+            first = catalog.page(offset=0, limit=17, refresh=True)
+            second = catalog.page(offset=first['next_offset'], limit=17, revision=first['revision'])
+            all_sessions = first['sessions'] + second['sessions']
+            self.assertEqual(first['total'], 26)
+            self.assertEqual(len(all_sessions), 26)
+            self.assertEqual(first['sessions'][0]['id'], 'root-00')
+            self.assertEqual(next(item for item in all_sessions if item['id'] == 'root-00')['title'], 'Catalog title')
+            self.assertEqual(next(item for item in all_sessions if item['id'] == 'root-24')['parent_id'], 'root-00')
+            active = next(item for item in all_sessions if item['id'] == 'root-01')
+            self.assertEqual(active['status'], 'running')
+            self.assertEqual(active['status_at'], '2026-10-04T01:01:00Z')
+            self.assertEqual(active['updated_at'], '2026-10-04T01:09:00Z')
+            unknown = next(item for item in all_sessions if item['id'] == 'root-03')
+            self.assertEqual(unknown['status'], 'unknown')
+            self.assertEqual(unknown['status_at'], '')
+            self.assertNotIn('PRIVATE LOG BODY', json.dumps(all_sessions))
+
+    def test_catalog_rejects_stale_page_revision_after_refresh(self):
+        self.assertIsNotNone(SessionCatalog, 'the independent session catalog should be available')
+        with tempfile.TemporaryDirectory() as directory:
+            sessions = Path(directory) / 'sessions'
+            sessions.mkdir()
+            (sessions / 'first.jsonl').write_text(json.dumps({'type': 'session_meta', 'payload': {'id': 'first'}}) + '\n')
+            catalog = SessionCatalog(sessions)
+            page = catalog.page(offset=0, limit=1, refresh=True)
+            (sessions / 'second.jsonl').write_text(json.dumps({'type': 'session_meta', 'payload': {'id': 'second'}}) + '\n')
+            refreshed = catalog.page(offset=0, limit=1, refresh=True)
+            self.assertNotEqual(page['revision'], refreshed['revision'])
+            with self.assertRaisesRegex(ValueError, '目录已更新'):
+                catalog.page(offset=1, limit=1, revision=page['revision'])
+
+    def test_catalog_invalid_unicode_does_not_hide_valid_sessions(self):
+        with tempfile.TemporaryDirectory() as directory:
+            sessions = Path(directory) / 'sessions'
+            sessions.mkdir()
+            for session_id, parent in [('valid', None), ('malformed', '\ud800')]:
+                records = [
+                    {'type': 'session_meta', 'payload': {'id': session_id, 'parent_thread_id': parent}},
+                    {'type': 'status', 'status': 'running', 'timestamp': '\ud800'},
+                ]
+                (sessions / f'{session_id}.jsonl').write_text(''.join(json.dumps(record) + '\n' for record in records))
+            page = SessionCatalog(sessions).page(refresh=True)
+            self.assertEqual(page['total'], 2)
+            json.dumps(page, ensure_ascii=False).encode('utf-8')
+
+    def test_catalog_explicit_unknown_clears_running_evidence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            sessions = Path(directory)
+            records = [
+                {'type': 'session_meta', 'payload': {'id': 'root'}},
+                {'type': 'status', 'status': 'running', 'timestamp': '2026-10-04T01:00:00Z'},
+                {'type': 'status', 'status': 'unknown', 'timestamp': '2026-10-04T02:00:00Z'},
+            ]
+            (sessions / 'root.jsonl').write_text(''.join(json.dumps(record) + '\n' for record in records))
+            row = SessionCatalog(sessions).page(refresh=True)['sessions'][0]
+            self.assertEqual(row['status'], 'unknown')
+            self.assertEqual(row['status_at'], '')

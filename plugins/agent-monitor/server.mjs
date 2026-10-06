@@ -7,7 +7,7 @@ import { z } from 'zod';
 import { MonitorBackend } from './backend.mjs';
 import { readBoundSnapshot, resolveBinding } from './binding.mjs';
 
-const server = new McpServer({ name: 'agent-monitor', version: '1.1.0' });
+const server = new McpServer({ name: 'agent-monitor', version: '1.2.0' });
 new OpenAIExtensions(server);
 const backend = new MonitorBackend();
 const uri = 'ui://agent-monitor/dashboard';
@@ -23,7 +23,13 @@ registerAppResource(server, 'Agent Monitor', uri, {}, async () => ({
 
 const inputSchema = {
   mode: z.enum(['live', 'demo']).optional().describe('live reads local logs; demo is explicitly simulated.'),
-  sessionId: z.string().regex(/^[a-zA-Z0-9_-]{1,80}$/).optional().describe('Explicit local session ID or unique prefix; otherwise binds host thread metadata when present, or visibly falls back to latest.'),
+  sessionId: z.string().regex(/^[a-zA-Z0-9_-]{1,80}$/).optional().describe('Explicit local session ID or unique prefix. Without it, the all-session hub stays unselected.'),
+};
+const catalogSchema = {
+  offset: z.number().int().min(0).optional(),
+  limit: z.number().int().min(1).max(500).optional(),
+  revision: z.string().max(64).optional(),
+  refresh: z.boolean().optional(),
 };
 async function readSnapshot(input, extra) {
   try {
@@ -43,10 +49,23 @@ registerAppTool(server, 'open_agent_monitor', {
 }, readSnapshot);
 
 server.registerTool('get_agent_snapshot', {
-  title: '刷新 Agent Monitor', description: '读取当前本地会话快照供监控界面刷新；无需模型参与。',
+  title: '刷新 Agent Monitor', description: '刷新明确选中的本地会话；没有选中会话时返回未选中的会话中心。',
   inputSchema, annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
   _meta: { ui: { visibility: ['app'] } },
 }, readSnapshot);
+
+server.registerTool('list_agent_sessions', {
+  title: '列出本机会话', description: '分页列出本机可读取会话的标题、项目、父子关系、状态和更新时间，不返回日志正文。',
+  inputSchema: catalogSchema,
+  annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }, _meta: { ui: { visibility: ['app'] } },
+}, async input => {
+  try {
+    const data = await backend.sessions(input);
+    return { content: [{ type: 'text', text: `会话目录：${data.total} 项。${data.warning || ''}` }], structuredContent: data };
+  } catch (error) {
+    return { isError: true, content: [{ type: 'text', text: error.message }] };
+  }
+});
 
 server.registerTool('get_agent_details', {
   title: '读取选中节点的公开过程与结果', description: '仅在点击节点时读取该节点公开的过程说明和最终回答，不返回内部推理或其他节点正文。',

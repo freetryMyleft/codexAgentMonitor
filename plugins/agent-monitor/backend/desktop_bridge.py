@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import sys
 import time
 
 from agent_monitor import DemoSource, EventSource, SessionSource, snapshot
@@ -43,10 +44,39 @@ def main():
     group.add_argument("--events", type=Path)
     parser.add_argument("--session")
     parser.add_argument("--details-agent")
+    parser.add_argument("--catalog", action="store_true",
+                        help="serve metadata-only session catalog requests from stdin")
+    parser.add_argument("--offset", type=int, default=0)
+    parser.add_argument("--limit", type=int, default=100)
+    parser.add_argument("--revision")
+    parser.add_argument("--refresh", action="store_true")
     parser.add_argument("--sessions-dir", type=Path,
                         default=Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))) / "sessions")
     parser.add_argument("--once", action="store_true")
     args = parser.parse_args()
+    if args.catalog:
+        from session_catalog import SessionCatalog
+        catalog = SessionCatalog(args.sessions_dir)
+        if args.once:
+            request = {"offset": args.offset, "limit": args.limit,
+                       "revision": args.revision, "refresh": args.refresh}
+            try:
+                print(json.dumps(catalog.page(**request), ensure_ascii=False, separators=(",", ":")), flush=True)
+            except ValueError as exc:
+                print(json.dumps({"error": str(exc)}, ensure_ascii=False, separators=(",", ":")), flush=True)
+            return
+        for line in sys.stdin:
+            try:
+                request = json.loads(line)
+                if not isinstance(request, dict):
+                    raise ValueError("目录请求格式不正确。")
+                page = catalog.page(offset=request.get("offset", 0), limit=request.get("limit", 100),
+                                    revision=request.get("revision"), refresh=request.get("refresh", False))
+                response = page
+            except (ValueError, TypeError) as exc:
+                response = {"error": str(exc)}
+            print(json.dumps(response, ensure_ascii=False, separators=(",", ":")), flush=True)
+        return
     source = (DemoSource() if args.demo else EventSource(args.events) if args.events else
               SessionSource(args.sessions_dir, session_id=args.session))
     state = SidebarState(args.details_agent)

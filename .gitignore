@@ -9,6 +9,8 @@ dist/
 node_modules/
 plugins/agent-monitor/runtime.mjs
 plugins/agent-monitor/runtime.pending.mjs
+plugins/agent-monitor/doctor.mjs
+plugins/agent-monitor/preview-runtime.mjs
 plugins/agent-monitor/.startup-lock/
 plugins/agent-monitor/dist/
 output/

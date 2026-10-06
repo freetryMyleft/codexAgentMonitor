@@ -1,6 +1,6 @@
 {
   "name": "agent-monitor",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "本地 Codex Agent 调度监控：实时流程图、状态、Token 与流转时间线。",
   "author": { "name": "Agent Monitor" },
   "mcpServers": "./.mcp.json",
@@ -11,6 +11,6 @@
     "brandColor": "#5D72C5",
     "composerIcon": "./assets/icon.svg",
     "logo": "./assets/icon.svg",
-    "defaultPrompt": ["打开 Agent Monitor，查看当前会话的流程流转。"]
+    "defaultPrompt": ["打开 Agent Monitor 全会话中心，选择要监控的会话。"]
   }
 }

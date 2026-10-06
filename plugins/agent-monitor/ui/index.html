@@ -20,12 +20,21 @@
     <div class="workspace">
       <aside class="sidebar">
         <p class="eyebrow">WORKSPACE</p>
-        <h1 id="project">等待会话</h1>
-        <p id="session-id" class="session-id">本地 Agent 调度监控</p>
-        <label class="field-label" for="sessions">切换会话</label>
-        <select id="sessions"><option value="">最近更新的会话</option></select>
+        <h1 id="project">所有会话</h1>
+        <p id="session-id" class="session-id">尚未选择会话</p>
+        <select id="sessions" hidden aria-hidden="true" tabindex="-1"><option value="">选择本机会话</option></select>
+        <label class="catalog-label" for="catalog-search">搜索标题、ID 或项目路径</label>
+        <input id="catalog-search" class="catalog-search" type="search" placeholder="搜索本机会话" autocomplete="off">
+        <div class="catalog-filters">
+          <label>项目<select id="catalog-project"><option value="">所有项目</option></select></label>
+          <label>状态<select id="catalog-status"><option value="all">全部状态</option><option value="running">执行中</option><option value="history">历史</option><option value="unknown">未知 / 空闲</option></select></label>
+        </div>
+        <div class="side-heading catalog-heading"><span>本机会话</span><span id="catalog-count" class="count">—</span></div>
+        <div id="catalog-summary" class="catalog-summary">正在读取会话目录…</div>
+        <div id="catalog-list" class="catalog-list" aria-live="polite"></div>
+        <button id="catalog-more" class="catalog-more" type="button" hidden>显示更多</button>
         <div class="side-heading"><span>执行单元</span><span id="agent-count" class="count">0</span></div>
-        <div id="agent-list" class="agent-list"><p class="muted">读取本地日志后显示。</p></div>
+        <div id="agent-list" class="agent-list"><p class="muted">选择会话后读取流程树。</p></div>
         <div class="sidebar-bottom"><span class="privacy-dot"></span><span>只读本地日志<br><small>状态以最后记录为准</small></span></div>
       </aside>
       <main class="main">

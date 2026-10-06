@@ -20,4 +20,16 @@ await build({
   banner: { js: 'import { createRequire as runtimeCreateRequire } from "node:module"; const require = runtimeCreateRequire(import.meta.url);' },
 });
 await rename(new URL('runtime.pending.mjs', root), new URL('runtime.mjs', root));
+await build({
+  entryPoints: [fileURLToPath(new URL('scripts/doctor.mjs', root))],
+  outfile: fileURLToPath(new URL('doctor.mjs', root)),
+  bundle: true, platform: 'node', format: 'esm', target: 'node20',
+  banner: { js: 'import { createRequire as doctorCreateRequire } from "node:module"; const require = doctorCreateRequire(import.meta.url);' },
+});
+await build({
+  entryPoints: [fileURLToPath(new URL('preview.mjs', root))],
+  outfile: fileURLToPath(new URL('preview-runtime.mjs', root)),
+  bundle: true, platform: 'node', format: 'esm', target: 'node20',
+  banner: { js: 'import { createRequire as previewCreateRequire } from "node:module"; const require = previewCreateRequire(import.meta.url);' },
+});
 console.error('Built standalone MCP runtime and sidebar UI.');

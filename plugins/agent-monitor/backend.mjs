@@ -21,13 +21,114 @@ export class MonitorBackend {
     this.detailTasks = new Set();
     this.control = control || new AgentControl();
     this.demoSettings = new Map();
+    this.catalogReader = null;
+    this.catalogQueue = Promise.resolve();
+  }
+
+  async sessions({ offset = 0, limit = 100, revision, refresh = false } = {}) {
+    if (this.closed) throw new Error('监控连接已关闭。');
+    if (!Number.isSafeInteger(offset) || offset < 0) throw new Error('目录偏移量不正确。');
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) throw new Error('目录每页数量不正确。');
+    if (revision !== undefined && (typeof revision !== 'string' || revision.length > 64)) throw new Error('目录版本不正确。');
+    if (typeof refresh !== 'boolean') throw new Error('目录刷新参数不正确。');
+    const request = { offset, limit, ...(revision !== undefined ? { revision } : {}), refresh };
+    const operation = this.catalogQueue.then(() => this.requestCatalog(request));
+    this.catalogQueue = operation.catch(() => {});
+    return operation;
+  }
+
+  startCatalogReader() {
+    if (this.closed) throw new Error('监控连接已关闭。');
+    if (!existsSync(this.bridge)) throw new Error('读取器未构建，请先运行 npm run build。');
+    this.python ||= findPython();
+    const args = ['-u', this.bridge, '--catalog'];
+    if (this.sessionsDir) args.push('--sessions-dir', this.sessionsDir);
+    const process = spawn(this.python, args, { stdio: ['pipe', 'pipe', 'pipe'], env: { ...globalThis.process.env, PYTHONDONTWRITEBYTECODE: '1' } });
+    const reader = { process, buffer: '', stderr: '', pending: null, error: null, stopping: false };
+    this.catalogReader = reader;
+    process.stdout.setEncoding('utf8');
+    process.stdout.on('data', chunk => {
+      reader.buffer += chunk;
+      if (reader.buffer.length > 4 * 1024 * 1024) {
+        this.failCatalog(reader, '会话目录响应过大，已停止读取。');
+        process.kill();
+        return;
+      }
+      let newline;
+      while ((newline = reader.buffer.indexOf('\n')) >= 0) {
+        const line = reader.buffer.slice(0, newline);
+        reader.buffer = reader.buffer.slice(newline + 1);
+        const pending = reader.pending;
+        if (!pending) { this.failCatalog(reader, '会话目录响应格式不正确。'); continue; }
+        clearTimeout(pending.timer);
+        reader.pending = null;
+        try {
+          const data = JSON.parse(line);
+          if (data?.error) pending.reject(new Error(data.error));
+          else if (!Array.isArray(data.sessions) || !Number.isInteger(data.total) || !Number.isInteger(data.offset)) throw new Error();
+          else pending.resolve(data);
+        } catch {
+          pending.reject(new Error('无法解析会话目录响应。'));
+          this.failCatalog(reader, '无法解析会话目录响应。');
+        }
+      }
+    });
+    process.stderr.setEncoding('utf8');
+    process.stderr.on('data', chunk => { reader.stderr = (reader.stderr + chunk).slice(-2000); });
+    process.stdin.on('error', () => this.failCatalog(reader, '无法向会话目录读取器发送请求。'));
+    process.on('error', () => this.failCatalog(reader, '无法启动会话目录读取器，请检查 Python。'));
+    process.on('exit', (code, signal) => {
+      if (!this.closed && !reader.stopping) this.failCatalog(reader, `会话目录读取器已退出（${code ?? signal}）。请重试。`);
+    });
+    return reader;
+  }
+
+  requestCatalog(request) {
+    const reader = this.catalogReader && !this.catalogReader.error ? this.catalogReader : this.startCatalogReader();
+    return new Promise((resolve, reject) => {
+      const pending = { resolve, reject };
+      reader.pending = pending;
+      pending.timer = setTimeout(() => {
+        if (reader.pending !== pending) return;
+        reader.pending = null;
+        this.failCatalog(reader, '读取会话目录超时，请重试。');
+        reader.process.kill();
+        reject(new Error('读取会话目录超时，请重试。'));
+      }, 30000);
+      reader.process.stdin.write(JSON.stringify(request) + '\n', error => {
+        if (error && reader.pending === pending) {
+          clearTimeout(pending.timer);
+          reader.pending = null;
+          reject(new Error('无法向会话目录读取器发送请求。'));
+          this.failCatalog(reader, '无法向会话目录读取器发送请求。');
+        }
+      });
+    });
+  }
+
+  failCatalog(reader, message) {
+    reader.error = message;
+    reader.stopping = true;
+    if (reader.pending) {
+      clearTimeout(reader.pending.timer);
+      reader.pending.reject(new Error(message));
+      reader.pending = null;
+    }
+    reader.process.kill('SIGTERM');
+    if (this.catalogReader === reader) this.catalogReader = null;
   }
 
   async read({ mode = 'live', sessionId } = {}) {
     if (this.closed) throw new Error('监控连接已关闭。');
     if (!['live', 'demo'].includes(mode)) throw new Error('未知数据源。');
     if (sessionId !== undefined && !/^[a-zA-Z0-9_-]{1,80}$/.test(sessionId)) throw new Error('会话 ID 格式不正确。');
-    const key = mode + ':' + (sessionId || 'latest');
+    if (mode === 'live' && sessionId === undefined) {
+      const page = await this.sessions({ offset: 0, limit: 100 });
+      return { source: 'CODEX · 会话目录', root_id: null, warning: page.warning, agents: [], flows: [],
+        sessions: page.sessions, total: page.total, next_offset: page.next_offset,
+        generated_at: page.generated_at, catalog_revision: page.revision };
+    }
+    const key = mode + ':' + (sessionId || 'demo');
     let reader = this.readers.get(key);
     if (reader?.error) {
       this.stopReader(reader);
@@ -101,6 +202,7 @@ export class MonitorBackend {
   }
 
   async details({ mode = 'live', sessionId, agentId }) {
+    if (mode === 'live' && !sessionId) throw new Error('请先选择一个会话，再读取节点记录。');
     if (!/^[a-zA-Z0-9_-]{1,80}$/.test(agentId || '')) throw new Error('节点 ID 格式不正确。');
     const snapshot = await this.read({ mode, sessionId });
     if (!snapshot.agents.some(agent => agent.id === agentId)) throw new Error('该节点不属于所选会话。');
@@ -138,6 +240,7 @@ export class MonitorBackend {
   }
 
   async selectedNode({ mode = 'live', sessionId, agentId }) {
+    if (mode === 'live' && !sessionId) throw new Error('请先选择一个会话，再读取或修改节点。');
     if (!/^[a-zA-Z0-9_-]{1,80}$/.test(agentId || '')) throw new Error('节点 ID 格式不正确。');
     const snapshot = await this.read({ mode, sessionId });
     const agent = snapshot.agents.find(agent => agent.id === agentId);
@@ -183,5 +286,12 @@ export class MonitorBackend {
     for (const child of this.detailTasks) child.kill();
     for (const reader of this.readers.values()) this.stopReader(reader);
     this.readers.clear();
+    if (this.catalogReader) {
+      const reader = this.catalogReader;
+      reader.stopping = true;
+      this.failCatalog(reader, '监控数据源已关闭。');
+      reader.process.kill('SIGTERM');
+      this.catalogReader = null;
+    }
   }
 }

@@ -15,6 +15,7 @@ test('MCP discovery exposes both entrypoints and a bundled UI; demo refresh retu
   try {
     await client.connect(transport);
     const tools = (await client.listTools()).tools;
+    assert(tools.some(tool => tool.name === 'list_agent_sessions'));
     const open = tools.find(tool => tool.name === 'open_agent_monitor');
     assert.deepEqual(open._meta['openai/ui'].entrypoints, [{ type: 'global' }, { type: 'thread' }]);
     assert.equal(open._meta.ui.resourceUri, 'ui://agent-monitor/dashboard');
@@ -31,6 +32,69 @@ test('MCP discovery exposes both entrypoints and a bundled UI; demo refresh retu
     assert(snapshot.structuredContent.flows.some(flow => flow.phase === 'dispatch'));
     assert.equal(snapshot.structuredContent.forks, 1656);
   } finally { await client.close(); }
+});
+
+test('session catalog paginates all readable IDs with stable ordering and no log bodies', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'agent-monitor-catalog-'));
+  const meta = (id, parent_thread_id) => ({ timestamp: '2026-10-03T06:00:00Z', type: 'session_meta', payload: { id, parent_thread_id, cwd: '/fixture' } });
+  try {
+    for (let index = 0; index < 25; index++) {
+      const id = `catalog-${String(index).padStart(2, '0')}`;
+      await writeFile(join(directory, `${id}.jsonl`), JSON.stringify(meta(id, index === 24 ? 'catalog-00' : undefined)) + '\n' +
+        (index === 1 ? JSON.stringify({ type: 'event_msg', payload: { type: 'task_started' } }) + '\n' : '') +
+        (index === 2 ? JSON.stringify({ type: 'response_item', payload: { type: 'message', content: 'SECRET BODY' } }) + '\n' : ''));
+    }
+    const backend = new MonitorBackend({ sessionsDir: directory });
+    try {
+      const first = await backend.sessions({ offset: 0, limit: 17, refresh: true });
+      const second = await backend.sessions({ offset: first.next_offset, limit: 17, revision: first.revision });
+      const all = [...first.sessions, ...second.sessions];
+      assert.equal(first.total, 25);
+      assert.equal(all.length, 25);
+      assert.equal(all[0].id, 'catalog-00');
+      assert.equal(all.find(session => session.id === 'catalog-24').parent_id, 'catalog-00');
+      assert.equal(all.find(session => session.id === 'catalog-01').status, 'running');
+      assert.doesNotMatch(JSON.stringify(all), /SECRET BODY/);
+      await assert.rejects(backend.sessions({ offset: 17, limit: 17, revision: 'stale' }), /目录已更新/);
+    } finally { backend.close(); }
+  } finally { await rm(directory, { recursive: true }); }
+});
+
+test('unselected live read stays on the catalog and live tree access requires an explicit session', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'agent-monitor-unselected-'));
+  await writeFile(join(directory, 'root.jsonl'), JSON.stringify({ type: 'session_meta', payload: { id: 'root', cwd: '/fixture' } }) + '\n');
+  const backend = new MonitorBackend({ sessionsDir: directory, control: { close() {}, settings: async () => ({}) } });
+  try {
+    const data = await backend.read();
+    assert.equal(data.root_id, null);
+    assert.deepEqual(data.agents, []);
+    assert.equal(data.sessions[0].id, 'root');
+    await assert.rejects(backend.selectedNode({ agentId: 'root' }), /选择一个会话/);
+    await assert.rejects(backend.details({ agentId: 'root' }), /选择一个会话/);
+    const selected = await backend.read({ sessionId: 'root' });
+    assert.equal(selected.root_id, 'root');
+  } finally { backend.close(); await rm(directory, { recursive: true }); }
+});
+
+test('malformed catalog protocol stops the old reader before a successful retry', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'agent-monitor-protocol-'));
+  const backend = new MonitorBackend({ sessionsDir: directory });
+  try {
+    await backend.sessions();
+    const previous = backend.catalogReader;
+    let rejected;
+    previous.pending = { reject: error => { rejected = error; }, resolve() {}, timer: setTimeout(() => {}, 1000) };
+    previous.process.stdout.emit('data', 'not json\n');
+    assert.match(rejected.message, /解析/);
+    assert(previous.error);
+    assert.equal(previous.process.killed, true);
+    assert.equal((await backend.sessions()).total, 0);
+    assert.notEqual(backend.catalogReader, previous);
+    const healthy = backend.catalogReader;
+    await assert.rejects(backend.sessions({ revision: 'stale' }), /目录已更新/);
+    assert.equal(backend.catalogReader, healthy);
+    assert.equal(healthy.process.killed, false);
+  } finally { backend.close(); await rm(directory, { recursive: true }); }
 });
 
 test('persistent reader isolates real session trees', async () => {
@@ -53,7 +117,7 @@ test('cached reader cannot report stale snapshots as live', async () => {
   const backend = new MonitorBackend();
   try {
     await backend.read({ mode: 'demo' });
-    backend.readers.get('demo:latest').emittedAt = Date.now() - 11000;
+    backend.readers.get('demo:demo').emittedAt = Date.now() - 11000;
     await assert.rejects(backend.read({ mode: 'demo' }), /过期/);
   } finally { backend.close(); }
 });

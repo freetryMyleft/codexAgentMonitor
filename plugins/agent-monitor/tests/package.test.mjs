@@ -33,7 +33,7 @@ test('isolated source first launch builds offline; release runs without node_mod
   const source = join(directory, 'source');
   try {
     await mkdir(source);
-    for (const path of ['scripts', 'ui', 'backend', 'assets', '.codex-plugin', '.mcp.json', 'package.json', 'package-lock.json', 'README.md', 'server.mjs', 'backend.mjs', 'control.mjs', 'binding.mjs']) {
+    for (const path of ['scripts', 'ui', 'backend', 'assets', '.codex-plugin', '.mcp.json', 'package.json', 'package-lock.json', 'README.md', 'server.mjs', 'backend.mjs', 'control.mjs', 'binding.mjs', 'preview.mjs']) {
       await cp(new URL(path, root), join(source, path), { recursive: true, filter: path => !path.endsWith('__pycache__') });
     }
     assert(!(await readdir(directory)).includes('agent_monitor.py'));
@@ -54,13 +54,19 @@ test('isolated source first launch builds offline; release runs without node_mod
     assert(!files.includes('package-lock.json'));
     const logs = await checkPackage(plugin);
     assert.doesNotMatch(logs, /preparing first launch/);
+    const doctor = spawnSync(process.execPath, [join(plugin, 'doctor.mjs'), plugin], { encoding: 'utf8', timeout: 15000 });
+    assert.equal(doctor.status, 0, doctor.stderr || doctor.stdout);
+    const report = JSON.parse(doctor.stdout);
+    assert.equal(report.server_ready, true);
+    assert.equal(report.sidebar_visibility, 'unverified');
+    assert(report.checks.some(check => check.id === 'catalog_tool' && check.ok));
 
-    // Real protocol invocation metadata must beat the latest log in CODEX_HOME.
+    // Invocation metadata never selects a tree; the catalog exposes every ID, including children.
     const codexHome = join(directory, 'codex-home');
     await mkdir(join(codexHome, 'sessions'), { recursive: true });
-    for (const id of ['chat-a', 'chat-b']) {
+    for (const [id, parent_thread_id] of [['chat-a', undefined], ['chat-b', undefined], ['child-a', 'chat-a']]) {
       await writeFile(join(codexHome, 'sessions', `${id}.jsonl`), JSON.stringify({
-        type: 'session_meta', payload: { id, cwd: '/fixture' }, timestamp: '2026-10-03T00:00:00Z',
+        type: 'session_meta', payload: { id, parent_thread_id, cwd: '/fixture' }, timestamp: '2026-10-03T00:00:00Z',
       }) + '\n');
     }
     const client = new Client({ name: 'binding-protocol-test', version: '1.0.0' });
@@ -69,10 +75,18 @@ test('isolated source first launch builds offline; release runs without node_mod
       await client.connect(transport);
       for (const id of ['chat-a', 'chat-b']) {
         const result = await client.callTool({ name: 'open_agent_monitor', arguments: {}, _meta: { 'openai/threadId': id } });
-        assert.equal(result.structuredContent.root_id, id);
-        assert.equal(result.structuredContent.binding.source, 'host');
+        assert.equal(result.structuredContent.root_id, null);
+        assert.equal(result.structuredContent.agents.length, 0);
+        assert.equal(result.structuredContent.binding.source, 'unselected');
       }
-      const missing = await client.callTool({ name: 'open_agent_monitor', arguments: {}, _meta: { threadId: 'missing' } });
+      const firstPage = await client.callTool({ name: 'list_agent_sessions', arguments: { offset: 0, limit: 2, refresh: true } });
+      const secondPage = await client.callTool({ name: 'list_agent_sessions', arguments: { offset: 2, limit: 2, revision: firstPage.structuredContent.revision } });
+      assert.equal(firstPage.structuredContent.total, 3);
+      assert.equal([...firstPage.structuredContent.sessions, ...secondPage.structuredContent.sessions].find(session => session.id === 'child-a').parent_id, 'chat-a');
+      const selected = await client.callTool({ name: 'open_agent_monitor', arguments: { sessionId: 'chat-a' } });
+      assert.equal(selected.structuredContent.root_id, 'chat-a');
+      assert.equal(selected.structuredContent.binding.source, 'explicit');
+      const missing = await client.callTool({ name: 'open_agent_monitor', arguments: { sessionId: 'missing' } });
       assert.equal(missing.isError, true);
       assert.match(missing.content[0].text, /不会自动切换/);
     } finally { await client.close(); }

@@ -27,6 +27,17 @@ const server = createServer(async (request, response) => {
     return;
   }
   if (request.method !== 'GET') { response.writeHead(405).end(); return; }
+  if (url.pathname === '/api/sessions') {
+    try {
+      const offset = url.searchParams.has('offset') ? Number(url.searchParams.get('offset')) : undefined;
+      const limit = url.searchParams.has('limit') ? Number(url.searchParams.get('limit')) : undefined;
+      const data = await backend.sessions({ offset, limit,
+        ...(url.searchParams.has('revision') ? { revision: url.searchParams.get('revision') } : {}),
+        refresh: url.searchParams.get('refresh') === 'true' });
+      response.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }).end(JSON.stringify(data));
+    } catch (error) { response.writeHead(/目录已更新/.test(error.message) ? 409 : 400, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }).end(JSON.stringify({ error: error.message })); }
+    return;
+  }
   if (['/api/snapshot', '/api/details', '/api/model-settings'].includes(url.pathname)) {
     try {
       const input = { mode: url.searchParams.get('mode') || 'live', sessionId: url.searchParams.get('sessionId') || undefined };

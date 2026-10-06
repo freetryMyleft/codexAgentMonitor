@@ -7,34 +7,35 @@ test('explicit selection overrides invocation metadata; demo stays simulated', (
   assert.equal(resolveBinding({ mode: 'demo' }, { _meta: { 'openai/threadId': 'other' } }).binding.source, 'demo');
 });
 
-test('binds each invocation independently using executor metadata', () => {
+test('opens the hub without inferring a session from executor metadata', () => {
   for (const _meta of [{ 'openai/threadId': 'chat-a' }, { 'x-codex-turn-metadata': { thread_id: 'chat-a' } },
     { 'x-codex-turn-metadata': '{"thread_id":"chat-a"}' }, { thread: { id: 'chat-a' } }]) {
-    assert.equal(resolveBinding({}, { _meta }).input.sessionId, 'chat-a');
-    assert.equal(resolveBinding({}, { _meta }).binding.source, 'host');
+    assert.equal(resolveBinding({}, { _meta }).input.sessionId, undefined);
+    assert.equal(resolveBinding({}, { _meta }).binding.source, 'unselected');
   }
-  assert.equal(resolveBinding({}, { _meta: { threadId: 'chat-b' } }).input.sessionId, 'chat-b');
+  assert.equal(resolveBinding({}, { _meta: { threadId: 'chat-b' } }).input.sessionId, undefined);
 });
 
-test('invalid caller identifiers fail instead of selecting an unrelated latest session', () => {
-  assert.throws(() => resolveBinding({}, { _meta: { threadId: '../secret' } }), /无效/);
-  assert.throws(() => resolveBinding({}, { _meta: { thread: { id: [] } } }), /无效/);
-  for (const _meta of [{ threadId: [] }, { threadId: 123 }, { threadId: '' }, { threadId: null },
-    { 'x-codex-turn-metadata': 'not json' }, { 'x-codex-turn-metadata': null }, { thread: [] }, { thread: { id: null } }]) {
-    assert.throws(() => resolveBinding({}, { _meta }), /无效/);
+test('invalid invocation metadata is ignored while explicit session IDs are validated', () => {
+  assert.equal(resolveBinding({}, { _meta: { threadId: '../secret' } }).binding.source, 'unselected');
+  assert.equal(resolveBinding({}, { _meta: { thread: { id: [] } } }).binding.source, 'unselected');
+  for (const sessionId of ['../secret', [], 123, '', null]) {
+    assert.throws(() => resolveBinding({ sessionId }), /格式不正确/);
   }
 });
 
-test('missing metadata is clearly labelled; snapshot annotations do not mutate reader cache', async () => {
-  const cached = { agents: [], flows: [], warning: '原有警告' };
-  const result = await readBoundSnapshot({ read: async () => cached }, {});
-  assert.equal(result.binding.source, 'latest');
-  assert.match(result.warning, /原有警告.*未提供会话绑定/);
-  assert.equal(cached.warning, '原有警告');
+test('unselected snapshot returns the catalog without reading a tree or mutating its cache', async () => {
+  const cached = { root_id: null, agents: [], flows: [], sessions: [{ id: 'chat-a' }], warning: '目录提示' };
+  let calls = 0;
+  const result = await readBoundSnapshot({ read: async input => { calls++; assert.equal(input.sessionId, undefined); return cached; } }, {});
+  assert.equal(calls, 1);
+  assert.equal(result.root_id, null);
+  assert.equal(result.binding.source, 'unselected');
+  assert.equal(result.warning, '目录提示');
   assert.equal(cached.binding, undefined);
 });
 
-test('missing host session logs fail instead of accepting an empty unpinned launch', async () => {
-  await assert.rejects(readBoundSnapshot({ read: async () => ({ root_id: null, agents: [], flows: [] }) }, {},
-    { _meta: { threadId: 'missing' } }), /不会自动切换/);
+test('an explicitly selected missing session fails instead of accepting an empty tree', async () => {
+  await assert.rejects(readBoundSnapshot({ read: async () => ({ root_id: null, agents: [], flows: [] }) },
+    { sessionId: 'missing' }), /不会自动切换/);
 });
